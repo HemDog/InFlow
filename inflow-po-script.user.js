@@ -1,21 +1,20 @@
 // ==UserScript==
-// @updateURL    https://raw.githubusercontent.com/HemDog/InFlow/main/inflow-po-script.user.js
-// @downloadURL  https://raw.githubusercontent.com/HemDog/Inflow/main/inflow-po-script.user.js
-// @name         InFlow Auto PO Filler & Rename PO with History API Detection
+// @name         InFlow Auto PO Filler & Rename PO Continuous Attempts
 // @namespace    http://yourdomain.com
-// @version      1.7
-// @description  Automatically fills the PO field and renames PO-related text even with SPA navigation
+// @version      1.10
+// @description  Automatically fills the PO field and renames PO continuously as long as you're on a sales-orders page
 // @match        https://app.inflowinventory.com/sales-orders/*
 // @grant        GM_xmlhttpRequest
 // @connect      docs.google.com
 // @connect      googleusercontent.com
+// @downloadURL  https://raw.githubusercontent.com/HemDog/inflow-po-script.user.js/main/inflow-po-script.user.js
+// @updateURL    https://raw.githubusercontent.com/HemDog/inflow-po-script.user.js/main/inflow-po-script.user.js
 // ==/UserScript==
 
 (function() {
     'use strict';
 
     const sheetUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ-iA8XppRLS2s-30ElJSdvNbrgOQB-kaYIS39uC1TwvHYS4HgmZKMbSR1vUuekeiYHlQaYsFuJk3P9/pub?output=csv";
-    let lastProcessedCustomer = null;
 
     function parseCSV(csvText) {
         let lines = csvText.trim().split('\n');
@@ -41,8 +40,7 @@
         }
 
         let customerName = customerField.value.trim();
-
-        if (lastProcessedCustomer === customerName) return;
+        if (!customerName) return; // no customer name, nothing to do
 
         GM_xmlhttpRequest({
             method: "GET",
@@ -53,10 +51,9 @@
                     return;
                 }
                 let data = parseCSV(response.responseText);
-                let row = data.find(r => r.Customer.trim().toLowerCase() === customerName.toLowerCase());
+                let row = data.find(r => r.Customer && r.Customer.trim().toLowerCase() === customerName.toLowerCase());
                 if (!row) {
                     console.log("No matching customer found in the sheet for:", customerName);
-                    lastProcessedCustomer = customerName;
                     return;
                 }
 
@@ -73,8 +70,6 @@
                 } else {
                     console.log(`No Blanket PO found for ${customerName}`);
                 }
-
-                lastProcessedCustomer = customerName;
             },
             onerror: function(err) {
                 console.error("Error fetching CSV:", err);
@@ -83,7 +78,6 @@
     }
 
     function renamePOElements() {
-        // Rename "PO #" in <p> elements to "Customer Notes"
         let paragraphs = document.querySelectorAll('p');
         paragraphs.forEach(p => {
             if (p.textContent.trim() === "PO #") {
@@ -98,7 +92,7 @@
         setTimeout(() => {
             tryInsertPO();
             renamePOElements();
-        }, 500);
+        }, 1000);
     });
     observer.observe(document.body, { childList: true, subtree: true });
 
@@ -111,11 +105,11 @@
     const originalReplaceState = history.replaceState;
 
     function handleHistoryChange() {
-        // Wait a bit for DOM changes to occur before running
+        // Wait a moment for the new page content to load
         setTimeout(() => {
             tryInsertPO();
             renamePOElements();
-        }, 500);
+        }, 1000);
     }
 
     history.pushState = function(state) {
@@ -133,4 +127,10 @@
     window.addEventListener('popstate', () => {
         handleHistoryChange();
     });
+
+    // Continuous fallback polling: every 3 seconds, try again to ensure PO is always inserted
+    setInterval(() => {
+        tryInsertPO();
+        renamePOElements();
+    }, 3000);
 })();
