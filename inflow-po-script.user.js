@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         InFlow Auto PO Filler & Rename PO Continuous Attempts
 // @namespace    http://yourdomain.com
-// @version      1.11
-// @description  Automatically fills the PO field and renames PO continuously as long as you're on a sales-orders page
+// @version      1.12
+// @description  Automatically fills the PO field and renames elements continuously as long as you're on a sales-orders page
 // @match        https://app.inflowinventory.com/*
 // @grant        GM_xmlhttpRequest
 // @connect      docs.google.com
@@ -88,7 +88,7 @@
         });
     }
 
-    // Rename PO elements if we're on the Sales Orders page
+    // Rename elements if we're on the Sales Orders page
     function renamePOElements() {
         // Only run if the URL includes '/sales-orders/'
         if (!window.location.href.includes('/sales-orders/')) {
@@ -97,9 +97,16 @@
 
         let paragraphs = document.querySelectorAll('p');
         paragraphs.forEach(p => {
+            // 1) Rename "PO #" → "Look Up Number"
             if (p.textContent.trim() === "PO #") {
-                p.textContent = "Customer Notes";
-                console.log('Renamed "PO #" to "Customer Notes"');
+                p.textContent = "Look Up Number";
+                console.log('Renamed "PO #" to "Look Up Number"');
+            }
+
+            // 2) Rename "Include shipping" → "Fulfill/Pick"
+            if (p.textContent.trim() === "Include shipping") {
+                p.textContent = "Fulfill/Pick";
+                console.log('Renamed "Include shipping" to "Fulfill/Pick"');
             }
         });
     }
@@ -125,7 +132,6 @@
     const originalReplaceState = history.replaceState;
 
     function handleHistoryChange() {
-        // Call immediately, or with a small delay if needed
         init();
     }
 
