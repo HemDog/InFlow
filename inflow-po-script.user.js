@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         InFlow Auto PO Filler & Rename PO Continuous Attempts
 // @namespace    http://yourdomain.com
-// @version      1.20
+// @version      1.21
 // @description  Automatically fills the PO field, renames elements, and makes quote- and sales order–specific modifications.
 // @match        https://app.inflowinventory.com/*
 // @grant        GM_xmlhttpRequest
