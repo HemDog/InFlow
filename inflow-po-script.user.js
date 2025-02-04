@@ -7,8 +7,8 @@
 // @grant        GM_xmlhttpRequest
 // @connect      docs.google.com
 // @connect      googleusercontent.com
-// @downloadURL  https://raw.githubusercontent.com/HemDog/InFlow/main/inflow-po-script.user.js
-// @updateURL    https://raw.githubusercontent.com/HemDog/InFlow/main/inflow-po-script.user.js
+// @downloadURL  https://github.com/HemDog/InFlow/raw/refs/heads/main/inflow-po-script.user.js
+// @updateURL    https://github.com/HemDog/InFlow/raw/refs/heads/main/inflow-po-script.user.js
 // @run-at       document-idle
 // ==/UserScript==
 
