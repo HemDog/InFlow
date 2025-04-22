@@ -853,10 +853,10 @@
         const events = [
             new Event('input', {bubbles: true, cancelable: true}),
             new Event('change', {bubbles: true, cancelable: true}),
-            new KeyboardEvent('keydown', {bubbles: true}),
-            new KeyboardEvent('keypress', {bubbles: true}),
-            new KeyboardEvent('keyup', {bubbles: true}),
-            new Event('focus', {bubbles: true}),
+            new KeyboardEvent('keydown', {bubbles: true}), // <<< RESTORED
+            new KeyboardEvent('keypress', {bubbles: true}), // <<< RESTORED
+            new KeyboardEvent('keyup', {bubbles: true}), // <<< RESTORED
+            new Event('focus', {bubbles: true}), // <<< RESTORED
             new Event('blur', {bubbles: true})
         ];
         for (const event of events) { input.dispatchEvent(event); }
@@ -865,22 +865,41 @@
             const reactKey = Object.keys(input).find(key => key.startsWith('__reactProps') || key.startsWith('__reactFiber'));
             if (reactKey) {
                 const reactProps = input[reactKey];
-                const handler = reactProps?.onChange || reactProps?.memoizedProps?.onChange;
+                const handler = reactProps?.onChange || reactProps?.memoizedProps?.onChange || reactProps?.props?.onChange;
                 if (handler && typeof handler === 'function') {
-                    handler({ target: input, currentTarget: input, preventDefault: () => {}, stopPropagation: () => {} });
-                    debugLog("Called React onChange handler directly");
+                     // Create a minimal event object that might satisfy the handler
+                     const eventArg = {
+                        target: input,
+                        currentTarget: input,
+                        type: 'change', // Mimic a change event
+                        bubbles: true,
+                        cancelable: true,
+                        isTrusted: false, // Indicate it's synthetic
+                        nativeEvent: { target: input }, // Provide nested nativeEvent if needed
+                        preventDefault: () => {},
+                        stopPropagation: () => {}
+                        // Add other properties if console errors indicate they are needed
+                    };
+                    handler(eventArg);
+                    debugLog("Attempted to call React onChange handler directly");
+                } else {
+                    log("React onChange handler not found or not a function.");
                 }
+            } else {
+                 log("React properties key not found on input element.");
             }
-        } catch (e) { debugLog("Error calling React handler: " + e.message, null, 'warn'); }
+        } catch (e) {
+            log("Error calling React handler: " + e.message, null, 'warn');
+        }
 
         setTimeout(() => { input.blur(); setTimeout(() => { input.focus(); document.body.click(); }, 100); }, 100);
     }
 
 
     // Populate Converted Quote Note Field (robustly) - Returns true if field found & attempt made
-    function populateConvertedQuoteNote(noteText) {
+    function populateConvertedQuoteNote(noteText, isUpdateWindow = false) {
         // ** ADD LOG **
-        debugLog("[populateConvertedQuoteNote Start] Received noteText: " + noteText);
+        debugLog("[populateConvertedQuoteNote Start] Received noteText: " + noteText + ` (isUpdateWindow: ${isUpdateWindow})`); // <<< LOG PARAMETER
         debugLog("Attempting to fill note field with: \"" + noteText + "\" using multiple methods");
         const input = findInputField();
         if (!input) {
@@ -891,97 +910,85 @@
         }
 
         createVisualNotice(input, "Setting note...");
-        window.focus();
-        input.focus();
-        input.click(); // Extra click to ensure focus
+        // window.focus(); // REMOVE THIS - Avoid potentially disruptive global focus changes
+        // input.focus(); // Let the caller manage focus if needed
+        // input.click(); // Avoid extra clicks
 
         let valueSetAndVerified = false; // Track if value is confirmed
 
-        // Method 1: Direct set + events
+        // Method 1: Direct set + events (Simplified)
         try {
-            debugLog("Trying Method 1: Direct set and dispatch");
-            input.value = '';
+            debugLog("Trying Simplified Method: Direct set and dispatch input/change");
+            input.value = ''; // Clear first
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.value = noteText;
+            // --- REVERT: Call original dispatchAllEvents ---
             dispatchAllEvents(input);
-            if (input.value === noteText) {
-                 debugLog("Method 1: Value verified.");
-                 valueSetAndVerified = true;
-                 checkForSaveButton(true); // <<< CALL SAVE CHECK HERE
-            } else {
-                 debugLog("Method 1: Value verification failed.", input.value, 'warn');
-            }
-        } catch (e) {
-            debugLog(`Method 1 Error: ${e.message}`, null, 'warn');
-        }
+            // input.dispatchEvent(new Event('input', { bubbles: true })); // Covered by dispatchAllEvents
+            // input.dispatchEvent(new Event('change', { bubbles: true })); // Covered by dispatchAllEvents
 
-        // Method 2: Use document.execCommand (only if Method 1 failed)
-        if (!valueSetAndVerified) {
+            // --- REMOVED: React handler call attempt (now part of dispatchAllEvents logic conceptually) ---
+            /*
             try {
-                debugLog("Trying Method 2: document.execCommand");
-                input.focus();
-                input.click();
-                input.select();
-                document.execCommand('delete', false, null);
-                const success = document.execCommand('insertText', false, noteText);
-                if (!success) throw new Error('execCommand insertText returned false');
-                dispatchAllEvents(input);
-                 if (input.value === noteText) {
-                     debugLog("Method 2: Value verified.");
-                     valueSetAndVerified = true;
-                     checkForSaveButton(true); // <<< CALL SAVE CHECK HERE
-                 } else {
-                      debugLog("Method 2: Value verification failed.", input.value, 'warn');
-                 }
-            } catch (e) {
-                debugLog(`Method 2 Error: ${e.message}`, null, 'warn');
-            }
-        }
-
-        // Method 3: Clipboard method (only if previous methods failed)
-        if (!valueSetAndVerified) {
-            try {
-                debugLog("Trying Method 3: Clipboard method");
-                const textarea = document.createElement('textarea');
-                textarea.value = noteText;
-                textarea.style.position = 'fixed'; textarea.style.left = '-9999px';
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textarea);
-
-                input.focus();
-                input.select();
-                document.execCommand('paste');
-                dispatchAllEvents(input);
-                // Verification for paste (may be less reliable without await)
-                // Use a small timeout to give paste a chance
-                setTimeout(() => {
-                    if (input.value === noteText) {
-                        debugLog("Method 3: Value verified (post-timeout).");
-                        valueSetAndVerified = true;
-                        checkForSaveButton(true); // <<< CALL SAVE CHECK HERE
-                    } else {
-                        debugLog("Method 3: Value verification failed (post-timeout).", input.value, 'warn');
-                        // If verification fails here, maybe don't return true?
-                        // For now, stick closer to original flow which might not have perfect verification
+                const reactKey = Object.keys(input).find(key => key.startsWith('__reactProps') || key.startsWith('__reactFiber'));
+                if (reactKey) {
+                    const reactProps = input[reactKey];
+                    const handler = reactProps?.onChange || reactProps?.memoizedProps?.onChange || reactProps?.props?.onChange;
+                    if (handler && typeof handler === 'function') {
+                         const eventArg = { target: input, currentTarget: input, type: 'change', bubbles: true, cancelable: true, isTrusted: false, nativeEvent: { target: input }, preventDefault: () => {}, stopPropagation: () => {} };
+                        handler(eventArg);
+                        debugLog("Attempted to call React onChange handler directly in populateConvertedQuoteNote");
                     }
-                }, 150); // Slightly longer timeout for paste
-                // Assume success for return purpose, let timeout handle save check
-                 valueSetAndVerified = true; // Assume paste likely worked for flow control
-
+                }
             } catch (e) {
-                debugLog(`Method 3 Error: ${e.message}`, null, 'error');
-                showError("Failed to automatically fill the note field (Clipboard Error).");
+                debugLog("Error calling React handler in populateConvertedQuoteNote: " + e.message, null, 'warn');
             }
+            */
+            // --- END REVERT ---
+            
+            // --- REMOVED: Explicit blur dispatch (now part of dispatchAllEvents) ---
+            // input.dispatchEvent(new Event('blur', { bubbles: true }));
+            // debugLog("Dispatched blur event after setting note value");
+            // --- END REMOVED ---
+
+            // Verification (Crucial) - Use a small delay to allow UI to potentially update
+            setTimeout(() => {
+                 if (input.value === noteText) {
+                     debugLog("Simplified Method: Value verified after delay.");
+                     valueSetAndVerified = true; // Keep this flag update
+
+                     // --- REMOVED: Secondary delay, call check immediately ---
+                     // setTimeout(() => {
+                          if (valueSetAndVerified) { // Re-check flag (good practice)
+                             debugLog("Verification succeeded, calling checkForSaveButton immediately.");
+                             checkForSaveButton(isUpdateWindow); // <<< Call immediately, pass flag
+                          }
+                     // }, 250); // Removed 250ms delay
+                     // --- END REMOVED ---
+
+                 } else {
+                      debugLog("Simplified Method: Value verification failed after delay.", input.value, 'warn');
+                      valueSetAndVerified = false; // Explicitly set false
+                      showError("Failed to automatically fill and verify the note field."); // Show error on verification failure
+                 }
+            }, 400); // INCREASED verification delay to 400ms
+
+            // For flow control, we initially assume it *might* work and rely on the timeout verification
+             valueSetAndVerified = true; // Tentative true for return value, verification happens async
+
+
+        } catch (e) {
+            debugLog(`Simplified Method Error: ${e.message}`, null, 'error');
+            showError("Error automatically filling the note field.");
+            valueSetAndVerified = false; // Ensure false on error
         }
 
-        if (!valueSetAndVerified) {
-            showError("All methods failed to set and verify the note field value.");
-            debugLog("[populateConvertedQuoteNote Error] No method successfully set and verified the value.");
-        }
-         debugLog("[populateConvertedQuoteNote Finish] Returning: " + valueSetAndVerified);
-        return valueSetAndVerified;
+
+
+
+        // This log might be misleading now due to async verification
+        // debugLog("[populateConvertedQuoteNote Finish] Returning tentative: " + valueSetAndVerified);
+        return valueSetAndVerified; // Return tentative success, actual save triggered by verification timeout
     }
 
     // Check for Save Button
@@ -1038,28 +1045,28 @@
                 try {
                     if (saveButton.offsetParent === null || saveButton.disabled) {
                          debugLog("Save button became hidden or disabled before click.", null, 'warn');
-                         // If it's the quote update, just let the outer timeout handle closing
-                         // If not, maybe try to detect completion?
-                         if (!isQuoteUpdate) detectSaveCompletion();
+                         // If it's the quote update, just close after delay
+                         if (isQuoteUpdate) {
+                             setTimeout(() => closeWindowAfterSave(true), 1500);
+                         }
                          return;
                      }
                     saveButton.click();
                     debugLog("Clicked Save button");
                     showStatusNotification("Changes saving...", "loading"); // Indicate saving started
 
-                    const marker = document.createElement('div');
-                    marker.id = 'save-button-clicked'; marker.style.display = 'none';
-                    document.body.appendChild(marker);
-                    // localStorage.setItem('saveCompleted', 'true'); // This flag might be unreliable now
+                    // --- MODIFIED: Bypass detection for quote update ---
+                    if (isQuoteUpdate) {
+                        debugLog("Quote update context: Bypassing save completion detection, closing after fixed delay.");
+                        // Use a reasonable fixed delay to allow save before closing
+                        setTimeout(() => closeWindowAfterSave(true), 4000); // Close after 4 seconds
+                    } else {
+                         // Original logic for other contexts (e.g., copied quote initial save)
+                         localStorage.setItem('saveInProgress', 'true'); // Set flag only when using detection
+                         detectSaveCompletion(); // Start monitoring for completion
+                    }
+                    // --- END MODIFIED ---
 
-                    // **CHANGE**: Always call detectSaveCompletion after clicking save
-                    // if (!isQuoteUpdate) {
-                    localStorage.setItem('saveInProgress', 'true'); // Set flag only when using detection
-                    detectSaveCompletion(); // Start monitoring for completion
-                    /* } else {
-                        debugLog("Skipping detectSaveCompletion for quote update window.");
-                        // The 12-second timeout in updateOriginalQuote will handle closing.
-                    } */
                 } catch (e) {
                     debugLog(`Error clicking Save button: ${e.message}`, null, 'error');
                     showStatusNotification("Failed to click Save button", "error");
@@ -1358,7 +1365,7 @@
     }
 
     // Update Original Quote (runs in the opened quote window)
-    function updateOriginalQuote() { // <<< REMOVED async
+    function updateOriginalQuote() {
         const updateInfo = checkForPendingQuoteUpdate();
         if (!updateInfo) return; // Not the right page or no update info
 
@@ -1369,47 +1376,51 @@
         marker.id = 'quote-already-updated'; marker.style.display = 'none';
         document.body.appendChild(marker);
 
-        window.focus();
+        debugLog("Starting update process for original quote note...");
         showStatusNotification(`Updating quote with SO note...`, 'loading');
-        localStorage.removeItem('saveButtonSearchTries');
-        localStorage.removeItem('saveCompleted');
-        localStorage.removeItem('saveInProgress');
 
-        debugLog("Attempting to populate quote with sales order note");
-
+        // --- REINTRODUCE RETRY LOGIC ---
         let updateAttempt = 0;
-        const maxUpdateAttempts = 5;
-        const attemptInterval = 1000;
+        const maxUpdateAttempts = 8; // Increased attempts slightly
+        const attemptInterval = 750; // Retry interval
 
-        const attemptToUpdateInterval = setInterval(() => { // <<< REMOVED async from callback
+        function tryUpdateNote() {
             updateAttempt++;
-            debugLog(`Attempting to update quote with sales order note (attempt ${updateAttempt}/${maxUpdateAttempts})`);
+            debugLog(`Attempting to update original quote note (attempt ${updateAttempt}/${maxUpdateAttempts})`);
 
-            const populateSuccess = populateConvertedQuoteNote(updateInfo.salesOrderNote); // <<< REMOVED await
-            debugLog("[updateOriginalQuote] populateConvertedQuoteNote returned: " + populateSuccess);
+            const populateSuccess = populateConvertedQuoteNote(updateInfo.salesOrderNote, true); // PASS TRUE
+            debugLog(`[tryUpdateNote] populateConvertedQuoteNote returned (tentative): ${populateSuccess}`);
 
             if (populateSuccess) {
-                clearInterval(attemptToUpdateInterval);
-                debugLog("Successfully attempted to update the original quote note. Save initiated by populateNote.");
-                localStorage.removeItem('pendingQuoteUpdate');
-
-                // ** REMOVED: checkForSaveButton(true); call is now in populateNote **
+                // Success: Note population initiated, rely on its internal verification/save trigger
+                debugLog("populateConvertedQuoteNote succeeded (tentatively). Relying on its async verification/save.");
+                localStorage.removeItem('pendingQuoteUpdate'); // Remove flag assuming process started
 
                 // Send to Google Sheets
                 setTimeout(() => {
                     sendMappingToGoogleSheets(updateInfo.quoteNumber, updateInfo.fullOrderNumber, updateInfo.originalQuoteUrl, updateInfo.orderUrl);
                 }, 500);
+                // Do NOT close the window here, let the save process handle it via closeWindowAfterSave
 
-            } else if (updateAttempt >= maxUpdateAttempts) {
-                clearInterval(attemptToUpdateInterval);
-                debugLog("[updateOriginalQuote Error] Failed to update original quote note after multiple attempts.", null, 'error');
-                showStatusNotification("Could not update quote automatically", 'error');
-                // ** ADD ERROR MESSAGE HERE **
-                showError("Could not find/update the 'CONVERTED QUOTE NOTE' field after several attempts.");
-                sendMappingToGoogleSheets(updateInfo.quoteNumber, updateInfo.fullOrderNumber, updateInfo.originalQuoteUrl, updateInfo.orderUrl);
-                setTimeout(closeWindowAfterSave, 1500);
-            }
-        }, attemptInterval);
+            } else if (updateAttempt < maxUpdateAttempts) {
+                 // Failure, but more attempts left: Schedule retry
+                 debugLog("Field likely not ready, scheduling retry...");
+                 setTimeout(tryUpdateNote, attemptInterval);
+
+            } else {
+                 // Failure and max attempts reached: Show error, send mapping, close window
+                 debugLog("[updateOriginalQuote Error] Failed to find/update original quote note after multiple attempts.", null, 'error');
+                 showStatusNotification("Could not update quote automatically", 'error');
+                 showError("Could not find/update the 'CONVERTED QUOTE NOTE' field after several attempts.");
+                 // Still send mapping and close window after delay
+                 sendMappingToGoogleSheets(updateInfo.quoteNumber, updateInfo.fullOrderNumber, updateInfo.originalQuoteUrl, updateInfo.orderUrl);
+                 setTimeout(() => closeWindowAfterSave(true), 1500); // Pass true to close quote window
+             }
+        }
+
+        // Initial attempt
+        tryUpdateNote();
+        // --- END RETRY LOGIC ---
     }
 
     // Process Copied Quote (runs in the new tab)
@@ -1442,7 +1453,7 @@
             populateAttempt++;
             debugLog(`Attempting to populate copied quote note (attempt ${populateAttempt}/${maxPopulateAttempts})`);
 
-            const populateSuccess = populateConvertedQuoteNote(conversionInfo.formattedNote);
+            const populateSuccess = populateConvertedQuoteNote(conversionInfo.formattedNote, false); // <<< PASS FALSE (or rely on default)
 
             if (populateSuccess) {
                 clearInterval(attemptToPopulateInterval);
@@ -1652,44 +1663,39 @@
             if (inputField.value !== valueWithPlaceholders) {
                 inputField.value = valueWithPlaceholders;
 
-                // Try calling React handler directly
+                // Try simpler event dispatch first
+                inputField.dispatchEvent(new Event('input', { bubbles: true }));
+                inputField.dispatchEvent(new Event('change', { bubbles: true }));
+
+                // --- REINSTATED: Attempt React handler call ---
                 try {
-                    let reactHandler = null;
                     const reactKey = Object.keys(inputField).find(key => key.startsWith('__reactProps') || key.startsWith('__reactFiber'));
                     if (reactKey) {
                         const reactProps = inputField[reactKey];
-                        reactHandler = reactProps?.onChange || reactProps?.memoizedProps?.onChange || reactProps?.props?.onChange;
-                    }
-
-                    if (reactHandler && typeof reactHandler === 'function') {
-                        const simulatedEvent = {
-                            target: inputField,
-                            currentTarget: inputField,
-                            type: 'change',
-                            bubbles: true,
-                            cancelable: true,
-                            preventDefault: () => {},
-                            stopPropagation: () => {}
-                        };
-                        reactHandler(simulatedEvent);
-                        // log("INTERNAL NOTE: Called React handler directly."); // Reduce logging
-                    } else {
-                        // log("INTERNAL NOTE: React handler not found, falling back.", null, 'warn'); // Reduce logging
-                        inputField.dispatchEvent(new Event('input', { bubbles: true }));
-                        inputField.dispatchEvent(new Event('change', { bubbles: true }));
+                        const handler = reactProps?.onChange || reactProps?.memoizedProps?.onChange || reactProps?.props?.onChange;
+                        if (handler && typeof handler === 'function') {
+                             const eventArg = { target: inputField, currentTarget: inputField, type: 'change', bubbles: true, cancelable: true, isTrusted: false, nativeEvent: { target: inputField }, preventDefault: () => {}, stopPropagation: () => {} };
+                            handler(eventArg);
+                            debugLog("Attempted to call React onChange handler directly in populateConvertedQuoteNote");
+                        }
                     }
                 } catch (e) {
-                    // log("INTERNAL NOTE: Error calling React handler, falling back.", e, 'error'); // Reduce logging
-                    inputField.dispatchEvent(new Event('input', { bubbles: true }));
-                    inputField.dispatchEvent(new Event('change', { bubbles: true }));
-                 }
+                    debugLog("Error calling React handler in populateConvertedQuoteNote: " + e.message, null, 'warn');
+                }
+                // --- END REINSTATED ---
             }
-            // ** REMOVED: Cursor restoration - let's see if conversion alone helps **
+            // ** REMOVED: Cursor restoration - focus on core sync **
         });
 
-        container.appendChild(textarea);
-        container.setAttribute('data-note-enhanced', 'true');
-        log("INTERNAL NOTE: Overlay textarea added.");
+        // Double-check: Only append if not already there
+        if (!container.querySelector('#custom2-textarea-overlay')) {
+            container.appendChild(textarea);
+            container.setAttribute('data-note-enhanced', 'true');
+             log("INTERNAL NOTE: Overlay textarea added.");
+        } else {
+            log("INTERNAL NOTE: Overlay already present, skipped appending.");
+        }
+
 
         // Add CSS for hiding the original input and styling/positioning the overlay
         const styleCheck = document.getElementById('internal-note-enhancement-style');
@@ -1806,11 +1812,13 @@
 
             try {
                 log("Calling useNativeCommands..."); // Add log
+                lookUpNumberField.focus(); // <<< ADD FOCUS before update
                 useNativeCommands(lookUpNumberField, jobNameValue, false);
+                // lookUpNumberField.blur(); // <<< REMOVED: useNativeCommands now handles blur
                 log("useNativeCommands finished."); // Add log
 
-                log("Waiting for delay..."); // Add log
-                await new Promise(resolve => setTimeout(resolve, 300));
+                log("Waiting for longer delay..."); // Add log
+                await new Promise(resolve => setTimeout(resolve, 1000)); // <<< INCREASED DELAY to 1000ms
                 log("Delay finished."); // Add log
 
                 log("Look Up Number updated, preparing to re-trigger save.");
@@ -1858,6 +1866,16 @@
             }
             return;
         }
+        // --- ADDED: Stronger duplicate check ---
+        if (remarksField.value.includes("JOB NAME/REF:") && remarksField.value.includes("PICKED UP BY:")) {
+            log("Remarks already fully formatted (JOB NAME & PICKED UP BY). Skipping.");
+            return;
+        }
+        // --- ADDED: Check formatting flag ---
+        if (remarksField.dataset.formatting === 'true') {
+            log("Remarks formatting already in progress. Skipping.");
+            return;
+        }
 
         let customerName = customerField.value.trim();
         if (!customerName) return;
@@ -1869,36 +1887,60 @@
         // Show loading state
         insertBPOStatusIndicator("loading");
 
-        GM_xmlhttpRequest({
-            method: "GET",
-            url: blanketPOSheetUrl, // Use correct URL
-            onload: function(response) {
-                let blanketPOValue = null;
-                if (response.status === 200) {
-                    try {
-                        let data = parseCSV(response.responseText);
-                        let row = data.find(r => (r["Customer Name"] || r["Customer_Name"] || r["Customer"] || "").trim().toLowerCase() === customerName.toLowerCase());
-                        if (row && row["Blanket PO"]) {
-                            blanketPOValue = row["Blanket PO"];
-                        }
-                    } catch (e) {
-                        console.error("Error parsing Blanket PO CSV:", e);
-                        // Proceed without blanketPO
-                    }
-                } else {
-                    console.error("Failed to fetch Blanket PO CSV. Status:", response.status);
-                    // Proceed without blanketPO
-                }
-                // Call helper to format and insert
-                formatAndInsertRemarks(blanketPOValue, remarksField);
-            },
-            onerror: function(err) {
-                console.error("Error fetching Blanket PO CSV:", err);
-                insertBPOStatusIndicator("error"); // Show error status
-                // Still try to format with page PO# even on sheet error
-                formatAndInsertRemarks(null, remarksField);
-            }
-        });
+        // --- ADDED: Set formatting flag ---
+        remarksField.dataset.formatting = 'true';
+
+        // --- ADDED: Delay before fetching/formatting ---
+        setTimeout(() => {
+             // Re-check elements in case they disappeared during the timeout
+             customerField = document.querySelector("#so_customer input[type='text']");
+             remarksField = document.querySelector('textarea[name="remarks"]');
+             if (!customerField || !remarksField) {
+                 log("Elements disappeared during tryInsertPO delay. Aborting.");
+                 return;
+             }
+             // Re-verify customer name hasn't changed during timeout
+             if (customerField.value.trim() !== customerName) {
+                 log("Customer changed during tryInsertPO delay. Aborting.");
+                 // Reset lastPOCustomer so the change triggers a new run
+                 localStorage.removeItem('lastPOCustomer');
+                 return;
+             }
+
+
+             GM_xmlhttpRequest({
+                 method: "GET",
+                 url: blanketPOSheetUrl, // Use correct URL
+                 onload: function(response) {
+                     let blanketPOValue = null;
+                     if (response.status === 200) {
+                         try {
+                             let data = parseCSV(response.responseText);
+                             let row = data.find(r => (r["Customer Name"] || r["Customer_Name"] || r["Customer"] || "").trim().toLowerCase() === customerName.toLowerCase());
+                             if (row && row["Blanket PO"]) {
+                                 blanketPOValue = row["Blanket PO"];
+                             }
+                         } catch (e) {
+                             console.error("Error parsing Blanket PO CSV:", e);
+                             // Proceed without blanketPO
+                         }
+                     } else {
+                         console.error("Failed to fetch Blanket PO CSV. Status:", response.status);
+                         // Proceed without blanketPO
+                     }
+                     // Call helper to format and insert
+                     formatAndInsertRemarks(blanketPOValue, remarksField);
+                 },
+                 onerror: function(err) {
+                     console.error("Error fetching Blanket PO CSV:", err);
+                     insertBPOStatusIndicator("error"); // Show error status
+                     // Still try to format with page PO# even on sheet error
+                     formatAndInsertRemarks(null, remarksField);
+                     // --- ADDED: Clear formatting flag on error ---
+                     remarksField.dataset.formatting = 'false'; // Clear flag if format attempt aborted by error
+                 }
+             });
+        }, 1000); // 1 second delay
     }
 
     // Helper function to format and insert remarks
@@ -1962,6 +2004,8 @@
             useNativeCommands(remarksField, textToInsert);
             log(`Updated remarks field. Prefix used: ${poPrefix}`);
         }
+        // --- ADDED: Clear formatting flag ---
+        remarksField.dataset.formatting = 'false'; // Ensure flag is cleared after update attempt
     }
 
     // Function to insert BPO status indicator
@@ -2250,6 +2294,14 @@
 
     // Auto-Assign if Sales Rep (Only on Sales Orders)
     function autoAssignIfSalesRep() {
+        // --- ADDED FOCUS GUARD ---
+        if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+            log("Skipping auto-assign: An input field has focus.");
+            return;
+        }
+        // --- END FOCUS GUARD ---
+
+
         // Skip if we're on a quote page (convert button exists) or not on a sales order page.
         let convertButton = document.getElementById("convertSalesOrder");
         if (convertButton) {
@@ -2595,45 +2647,58 @@
     // Use Native Commands for Input (with optional Enter simulation)
     function useNativeCommands(inputElement, text, simulateEnter = false) {
         log(`Using native commands for text input: "${text}" (Simulate Enter: ${simulateEnter})`);
-        inputElement.focus();
+        // inputElement.focus(); // Let caller manage focus
+
+        // Method 1: Direct value set + events (Simplified)
         inputElement.value = ''; // Clear first
         inputElement.dispatchEvent(new Event('input', { bubbles: true })); // Trigger input event for clearing
-
-        // Method 1: Direct value set + events
         inputElement.value = text;
         inputElement.dispatchEvent(new Event('input', { bubbles: true }));
         inputElement.dispatchEvent(new Event('change', { bubbles: true }));
-        log('Set value directly and dispatched events');
+        log('Set value directly and dispatched input/change events');
 
-        // Method 2: Call React handler directly (if possible)
+        // --- REINSTATED: Attempt to call React handler directly ---
         try {
             const reactKey = Object.keys(inputElement).find(key => key.startsWith('__reactProps') || key.startsWith('__reactFiber'));
             if (reactKey) {
                 const reactProps = inputElement[reactKey];
-                const handler = reactProps?.onChange || reactProps?.memoizedProps?.onChange;
+                // Look for common handler names
+                const handler = reactProps?.onChange || reactProps?.memoizedProps?.onChange || reactProps?.props?.onChange;
                 if (handler && typeof handler === 'function') {
-                    handler({ target: inputElement, currentTarget: inputElement, preventDefault: () => {}, stopPropagation: () => {} });
-                    log("Called React onChange handler directly");
+                     // Create a minimal event object that might satisfy the handler
+                     const eventArg = {
+                        target: inputElement,
+                        currentTarget: inputElement,
+                        type: 'change', // Mimic a change event
+                        bubbles: true,
+                        cancelable: true,
+                        isTrusted: false, // Indicate it's synthetic
+                        nativeEvent: { target: inputElement }, // Provide nested nativeEvent if needed
+                        preventDefault: () => {},
+                        stopPropagation: () => {}
+                        // Add other properties if console errors indicate they are needed
+                    };
+                    handler(eventArg);
+                    log("Attempted to call React onChange handler directly");
+                } else {
+                    log("React onChange handler not found or not a function.");
                 }
+            } else {
+                 log("React properties key not found on input element.");
             }
-        } catch (e) { log("Error calling React handler: " + e.message, null, 'warn'); }
+        } catch (e) {
+            log("Error calling React handler: " + e.message, null, 'warn');
+        }
+        // --- END REINSTATED ---
 
-        // Method 3: execCommand fallback (if value didn't stick)
+
+
+        // Blur/Refocus and Enter simulation (Keep this part, but maybe simplify delay)
         setTimeout(() => {
-             if (inputElement.value !== text) {
-                 log("Value didn't stick, trying execCommand...", null, 'warn');
-                 try {
-                     inputElement.select();
-                     document.execCommand('insertText', false, text);
-                     log('Used execCommand insertText');
-                 } catch(e) { log('execCommand failed: ' + e.message, null, 'error');}
-             }
-
-             // Ensure field is blurred and refocused to trigger validation/state updates
-             inputElement.blur();
-             setTimeout(() => {
-                 inputElement.focus();
-                 // Press Enter after a delay (if requested)
+            inputElement.blur(); // <<< RE-ADD BLUR
+            // setTimeout(() => {
+                 // inputElement.focus(); // Avoid unnecessary blur/focus cycle if possible
+                 // Press Enter (if requested) - Keep this part
                  if (simulateEnter) {
                      log('Simulating Enter key');
                      inputElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
@@ -2641,8 +2706,8 @@
                      // Wait for search results (if applicable)
                      setTimeout(() => findAndClickProduct(text), 1000);
                  }
-             }, 100);
-        }, 150); // Increased delay to check if value stuck
+            // }, 100);
+        }, 100); // Reduced delay slightly, removed nested timeout/blur/focus
     }
 
 
@@ -2785,6 +2850,7 @@
               let runInternalNoteCheck = false; // <-- Add flag for internal note
               let runSaveButtonListenerCheck = false; // <-- Add flag for save button listener
               let runQuotePageUICheck = false; // <-- Add flag for quote page UI check
+              let runAssignCheck = false; // <-- ADDED: Specific flag for assignment section changes
 
 
              for (const mutation of mutations) {
@@ -2810,8 +2876,9 @@
                                }
                                // ---- ADDED Check for Assigned To section ----
                                if (node.matches && node.matches('div.sc-3e2e0cb2-1.gtsOkx') || node.querySelector('div.sc-3e2e0cb2-1.gtsOkx')) {
-                                   log("Observer detected Assigned To section.");
-                                   runSalesOrderCheck = true;
+                                   log("Observer detected Assigned To section added/modified.");
+                                   runSalesOrderCheck = true; // Still relevant for SO context
+                                   runAssignCheck = true; // Set specific flag
                                }
                                // ---- ADDED Check ----
                                if (node.matches && node.matches('#save') || node.querySelector('#save')) { runSaveButtonListenerCheck = true; }
@@ -2862,25 +2929,39 @@
                  }
              }
              if (runQuoteUpdateCheck || reInitNeeded) {
-                  if (checkForPendingQuoteUpdate() && !document.getElementById('quote-already-updated')) {
-                     updateOriginalQuote();
-                 }
-             }
-              if (runCopiedQuoteCheck || reInitNeeded) {
-                 if (getStoredConversionInfo() && !document.getElementById('automation-already-started') && !isOriginalQuotePage()) {
-                     setTimeout(processCopiedQuote, 500); // Small delay before processing copied quote
-                 }
-             }
-             if (runSalesOrderCheck || reInitNeeded) {
-                  if (window.location.href.includes('/sales-orders/')) {
-                      tryInsertPO(); // This still runs, but no longer attaches the listener
-                      addCardOnFileIndicator();
-                      renamePOElements(); // Re-apply renaming
-                      checkCreditHold(); // Re-check credit hold
-                       autoAssignIfSalesRep(); // Re-check assignment
+                  // --- TEMPORARILY DISABLED IN OBSERVER ---
+                  /*
+                   if (checkForPendingQuoteUpdate() && !document.getElementById('quote-already-updated')) {
+                      updateOriginalQuote();
                   }
-             }
-             if (runProductCheck || reInitNeeded) {
+                  */
+                  // --- END TEMPORARY DISABLE ---
+              }
+              if (runCopiedQuoteCheck || reInitNeeded) {
+                  // --- TEMPORARILY DISABLED IN OBSERVER ---
+                  
+                   if (getStoredConversionInfo() && !document.getElementById('automation-already-started') && !isOriginalQuotePage()) {
+                       setTimeout(processCopiedQuote, 500); // Small delay before processing copied quote
+                   }
+                  
+                   // --- END TEMPORARY DISABLE ---
+              }
+              if (runSalesOrderCheck || reInitNeeded) {
+                   if (window.location.href.includes('/sales-orders/')) {
+                       tryInsertPO(); // This still runs, but no longer attaches the listener
+                       addCardOnFileIndicator();
+                       renamePOElements(); // Re-apply renaming
+                       checkCreditHold(); // Re-check credit hold
+                         // --- TEMPORARILY DISABLED IN OBSERVER ---
+                        // Call autoAssign only if the specific section changed and focus guard allows
+                        if (runAssignCheck) {
+                           log("Assign section change detected, attempting auto-assign check.");
+                           autoAssignIfSalesRep(); // Re-check assignment
+                        }
+                         // --- END TEMPORARY DISABLE ---
+                   }
+              }
+              if (runProductCheck || reInitNeeded) {
                   checkForProductTypeOptions();
              }
              if (runAsSalesOrderCheck) {
@@ -2906,8 +2987,8 @@
                   const saveButton = document.getElementById('save');
                   // Check visibility (offsetParent) and if listener is already attached
                   if (saveButton && saveButton.offsetParent !== null && !saveButton.hasAttribute('data-lookup-save-listener')) {
-                      log("Attaching Look Up Number save handler to Save button.");
-                      saveButton.addEventListener('click', handleSaveClick, true); // Capture phase
+                      log("Attaching Look Up Number save handler to Save button (Bubble Phase).");
+                      saveButton.addEventListener('click', handleSaveClick, false); // Use bubble phase (default)
                       saveButton.setAttribute('data-lookup-save-listener', 'true');
                   }
              }
@@ -2920,7 +3001,7 @@
         subtree: true,
         attributes: true,
          // Observe specific attributes that often change with state
-         attributeFilter: ['style', 'class', 'disabled', 'value', 'title', 'id'] // Added ID just in case
+         attributeFilter: ['style', 'class', 'disabled', 'title', 'id'] // Removed 'value' to reduce noise
     });
 
     // --- History change handling (SPA navigation) ---
@@ -2950,13 +3031,15 @@
 
                  // Full re-initialization
                  setTimeout(startScriptChecks, 500); // Rerun the startup checks
-                 // ** ADD: Call handleQuotePage after a short delay on navigation **
-                 setTimeout(handleQuotePage, 600); // Ensure it runs after re-init
-                 // ** ADD: Specific delayed check for auto-assign on SO pages after navigation **
-                 if (window.location.href.includes('/sales-orders/')) {
-                     log("Scheduling delayed auto-assign check after navigation to SO page.");
-                     setTimeout(autoAssignIfSalesRep, 1500); // Delay check by 1.5 seconds
-                 }
+                 // ** ADD: Clear lastPOCustomer on navigation **
+                 localStorage.removeItem('lastPOCustomer');
+                  // ** ADD: Call handleQuotePage after a short delay on navigation **
+                  setTimeout(handleQuotePage, 600); // Ensure it runs after re-init
+                  // ** ADD: Specific delayed check for auto-assign on SO pages after navigation **
+                  if (window.location.href.includes('/sales-orders/')) {
+                      log("Scheduling delayed auto-assign check after navigation to SO page.");
+                      setTimeout(autoAssignIfSalesRep, 1500); // Delay check by 1.5 seconds
+                  }
              }
         });
     }
@@ -3139,8 +3222,8 @@
          if (window.location.href.includes('/sales-orders/')) {
              checkCreditHold();
          }
-         // Periodic check for internal note field enhancement <-- Add this
-         enhanceInternalNoteField();
+         // Periodic check for internal note field enhancement <-- REMOVED THIS CHECK
+         // enhanceInternalNoteField();
          // ** ADD: Explicit periodic check for quote page UI **
          if (isThisAQuotePage()) {
              handleQuotePage();
